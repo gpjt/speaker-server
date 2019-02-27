@@ -1,0 +1,386 @@
+sudo apt install libffi-dev
+sudo apt install libsndfile1
+sudo apt install libportaudio2
+pip install numpy
+pip install sounddevice
+pip install pysoundfile
+
+so:
+
+aplay day-i-die.wav
+
+works fine.
+
+But in both Python and IPython shells, the following hangs a few tens of seconds into the song:
+
+>>> import soundfile as sf
+>>> data, samplerate = sf.read("day-i-die.wav")
+>>> import sounddevice as sd
+>>> sd.play(data, samplerate)
+>>>
+^C^C^C^C^Z
+[1]+  Stopped                 python
+(sound-play) giles@pedro:~/sound-play$ kill -9 %1
+
+sd.stop() also hangs and can't be interrupted by ^C
+
+also
+
+(sound-play) giles@pedro:~/sound-play$ cat > test.py
+import soundfile as sf
+import sounddevice as sd
+data, samplerate = sf.read("day-i-die.wav")
+sd.play(data, samplerate)
+input("Hit enter when done")
+(sound-play) giles@pedro:~/sound-play$ python test.py
+
+...note it doesn't print out the prompt.  Also hangs about ten second in
+
+^CTraceback (most recent call last):
+  File "test.py", line 5, in <module>
+    input("Hit enter when done")
+KeyboardInterrupt
+^C
+
+...so it clearly is reaching the input, not sure why it's not displaying anything.
+
+Worth noting there's no volume control in sounddevice because it's just a wrapper on top of portaudio, which doesn't provide one.
+
+pyalsaaudio by contrast has a mixer interface, which presumably can talk to the sound device's built-in volume -- better to do the volume changes in analog-land to avoid losing resolution
+
+TBH it feels like pyalsaaudio is the way to go
+
+pip install pyalsaaudio
+
+Downloaded the raw playwav.py file from their github, changed to make it compatible with Python 3 (needed an integer division) and it worked!
+
+Feels nice -- less magic.   Control-C works (played again after first complete runthrough to check), no weird uninterruptable programs or anything like that.  You just tell it what bytes to play and it plays them.
+
+Hard to find a good mp3 library in Python, though!  All of the ones I can find seem to shell out to ffmpeg, which is silly.
+
+Aha!  Roberto De Ioris of uWSGI fame has written a wrapper for libmpg123: https://github.com/20tab/mpg123-python/blob/master/examples/mp3_to_wave.py -- and that's one of the libaries used by the node-lame converter the current speaker uses.
+
+pip install mpg123
+
+Hacked together a simple thing based on the playwav from pyalsaaudio to try it out
+
+(sound-play) giles@pedro:~/sound-play$ python playmp3.py day-i-die.mp3
+Traceback (most recent call last):
+  File "playmp3.py", line 64, in <module>
+    mp3 = Mpg123(args[0])
+  File "/home/giles/.virtualenvs/sound-play/lib/python3.6/site-packages/mpg123.py", line 110, in __init__
+    self._lib = self.init_library(library_path)
+  File "/home/giles/.virtualenvs/sound-play/lib/python3.6/site-packages/mpg123.py", line 99, in init_library
+    raise self.LibInitializationException('libmpg123 not found')
+mpg123.LibInitializationException: libmpg123 not found
+
+...but it looks like I still need to install libmp3 because the node thing came with its own pre-installed version
+
+sudo apt install libmpg123-dev
+
+2 channels, 44100 sampling rate, 208 encoding
+
+...comes back from
+
+rate, channels, encoding = mp3.get_format()
+
+print("{} channels, {} sampling rate, {} encoding".format(
+    channels, rate, encoding
+))
+# Set attributes
+device.setchannels(channels)
+device.setrate(rate)
+
+208 is some kind of mp3-specific encoding identifier.  The following code seems to work OK:
+
+#!/usr/bin/env python
+
+# Simple test script that plays (some) wav files
+
+from __future__ import print_function
+
+import sys
+from mpg123 import Mpg123
+import getopt
+import alsaaudio
+
+def play(device, mp3):
+    rate, channels, encoding = mp3.get_format()
+
+    print("{} channels, {} sampling rate, {} encoding".format(
+        channels, rate, encoding
+    ))
+
+    width = mp3.get_width_by_encoding(encoding)
+    print("width comes out as {}".format(width))
+
+    # Set attributes
+    device.setchannels(channels)
+    device.setrate(rate)
+
+    # 8bit is unsigned in wav files
+    if width == 1:
+        device.setformat(alsaaudio.PCM_FORMAT_U8)
+    # Otherwise we assume signed data, little endian
+    elif width == 2:
+        device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+    elif width == 3:
+        device.setformat(alsaaudio.PCM_FORMAT_S24_3LE)
+    elif width == 4:
+        device.setformat(alsaaudio.PCM_FORMAT_S32_LE)
+    else:
+        raise ValueError('Unsupported format')
+
+    periodsize = int(rate / 8)
+
+    device.setperiodsize(periodsize)
+
+    for frame in mp3.iter_frames():
+        device.write(frame)
+
+
+def usage():
+    print('usage: playwav.py [-d <device>] <file>', file=sys.stderr)
+    sys.exit(2)
+
+if __name__ == '__main__':
+
+    device = 'default'
+
+    opts, args = getopt.getopt(sys.argv[1:], 'd:')
+    for o, a in opts:
+        if o == '-d':
+            device = a
+
+    if not args:
+        usage()
+
+    mp3 = Mpg123(args[0])
+    device = alsaaudio.PCM(device=device)
+
+    play(device, mp3)
+
+
+------
+
+
+Let's try FLAC.  The problem is that soudfile appears to be everyone's go-to for this format, but it returns the sample data in numpy arrays, normalized to the size of the data format you ask for it in:
+
+In [1]: import soundfile
+
+In [2]: f = soundfile.SoundFile("sea-of-love.flac")
+
+In [3]: f.subtype
+Out[3]: 'PCM_24'
+
+In [4]: data = f.read()
+
+In [5]: data
+Out[5]:
+array([[0., 0.],
+       [0., 0.],
+       [0., 0.],
+       ...,
+       [0., 0.],
+       [0., 0.],
+       [0., 0.]])
+
+In [6]: import numpy as np
+
+In [7]: np.amax(data, 1)
+Out[7]: array([0., 0., 0., ..., 0., 0., 0.])
+
+In [8]: np.amax(data)
+Out[8]: 0.9635502099990845
+
+...
+
+In [13]: f.close()
+
+In [14]: f = soundfile.SoundFile("sea-of-love.flac")
+
+In [15]: data = f.read(dtype="int32")
+
+In [16]: np.amax(data)
+Out[16]: 2069208320
+
+In [17]: 2**24
+Out[17]: 16777216
+
+In [18]: 2**31
+Out[18]: 2147483648
+
+In [19]: f.close()
+
+....and I just want the raw data that I can send to alsa.
+
+Let's try pyogg:
+
+sudo apt install libflac-dev
+
+In [1]: import pyogg
+^[[A
+In [2]: pyogg.FlacFile("sea-of-love.flac")
+---------------------------------------------------------------------------
+PyOggError                                Traceback (most recent call last)
+<ipython-input-2-b41d551ded14> in <module>
+----> 1 pyogg.FlacFile("sea-of-love.flac")
+
+~/.virtualenvs/sound-play/lib/python3.6/site-packages/pyogg/__init__.py in __init__(*args, **kw)
+    411     class FlacFile:
+    412         def __init__(*args, **kw):
+--> 413             raise PyOggError("The FLAC libraries weren't found or couldn't be loaded (maybe you're trying to use 64bit libraries with 32bit Python?)")
+    414
+    415     class FlacFileStream:
+
+PyOggError: The FLAC libraries weren't found or couldn't be loaded (maybe you're trying to use 64bit libraries with 32bit Python?)
+
+In [3]:
+
+hmmmm
+
+Ah, it's a bug -- they're looking for libflac but the library is called libFLAC.  After fixing that, though, it can't parse the file.   Looks kind of broken
+
+Well, what a mess!
+
+Ah, wait -- no, it parsed it.   It was just rather slow -- but that's fair enough, it's reading the whole thing into memory from a slow SD.
+
+However, it's still not bytes, and I'm not sure how it's formatted:
+
+In [10]: type(flac.buffer[0])
+Out[10]: int
+
+In [11]: flac.buffer_length
+Out[11]: 85032960
+
+In [12]: flac.total_samples
+Out[12]: 21258240
+
+In [13]: flac.buffer_length / flac.total_samples
+Out[13]: 4.0
+
+In [14]: while i < flac.buffer_length:
+    ...:     print("{} {} {} {}".format(flac.buffer[i], flac.buffer[i+1], flac.buffer[i+2], flac.buffer[i+3]))
+    ...:     i += 4
+    ...:
+
+...
+
+-22899 -32070 -16750 5805
+-8600 -14331 -9028 20817
+-8529 -9409 -4582 32660
+-807 31923 15247 -15753
+-20476 -1364 17628 19333
+415 -6367 -6512 -10602
+-6411 6678 2704 21937
+13579 25791 7488 21427
+-2002 15766 -7897 18246
+32139 11808 -12910 -12400
+.....
+
+Let's look at the actual source code for the C implementation, along with its examples.
+
+Ah, wait -- two channels!  So those are something like
+
+-22899 -32070 -- left
+-16750 5805 - right
+
+...?
+
+But some pairs still look too big to be 24-bit numbers.
+
+
+Hmph.  Well, let's at least try to get a 24-bit flac playing.
+
+sudo apt install flac
+flac -d sea-of-love.flac
+aplay sea-of-love.wav
+
+Works!  Now, let's try playing to FLAC directly
+
+sudo apt-get install mplayer
+mplayer sea-of-love.flac
+
+Works!
+
+But initially:
+
+(sound-play) giles@pedro:~/sound-play$ python playwav.py sea-of-love.wav
+2 channels, 96000 sampling rate
+24-bit
+Traceback (most recent call last):
+  File "playwav.py", line 67, in <module>
+    play(device, f)
+  File "playwav.py", line 30, in play
+    device.setformat(alsaaudio.PCM_FORMAT_S24_3LE)
+AttributeError: module 'alsaaudio' has no attribute 'PCM_FORMAT_S24_3LE'
+(sound-play) giles@pedro:~/sound-play$
+
+Tried changing that to PCM_FORMAT_S24_LE but just get static.  Try changing to PCM_FORMAT_U24_LE and get static with what sounds like the music trying to get through.
+
+Aha!  PCM_FORMAT_S24_LE is 24 bits stored one-per-32-bit word.  PCM_FORMAT_S24_3LE was entirely correct, but was only added to pyalsaaudio on 29 Aug 2017, and I pip installed it, which picked up a version from 24 Feb 2017.  Let's re-install from a git checkout.
+
+...had to pip uninstall the old one as well, but it worked!
+
+OK, so we can definitely play back 24-bit WAV files.
+
+We just need to find out how to parse FLACs into the appropriate format.
+
+things to look into:
+
+https://nbviewer.jupyter.org/github/mgeier/python-audio/blob/master/audio-files/index.ipynb
+https://github.com/Zuzu-Typ/PyOgg/
+https://github.com/larsimmisch/pyalsaaudio/
+
+
+After some thought -- ultimately, so long as PySoundFile is returning real data, then it's OK.  We can tell it to read it as 32-bit numbers, and then confirm that they really are the right numbers.  If they are, I think we can just send them straight to ALSA with the correct "this is 24-bit padded to 32-bit words with a zero at the end"
+
+First check:
+
+import soundfile
+data, rate = soundfile.read("sea-of-love.flac", dtype="int32")
+for a, b in data:
+    print("{:02X} {:02X}".format(a, b))
+
+...and we get numbers like
+
+2E195400 34973200
+2F10AE00 33110300
+2FEE6A00 31A6E600
+30E57E00 30542000
+31D82000 2F21B600
+32A41C00 2E2CE200
+
+...they all end in "00".  So it looks like it's just padded it in the most obvious way :-)   Now let's check it against a WAV file that we created from the same FLAC using the flac command-line tool:
+
+data2, rate2 = soundfile.read("sea-of-love.wav", dtype="int32")
+for (a1, b1), (a2, b2) in zip(data, data2):
+    if a1 != a2 or b1 != b2:
+        print("{:02X} {:02X}".format(a1, b1))
+
+...and it prints nothing out :-)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
