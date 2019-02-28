@@ -11,38 +11,25 @@ import alsaaudio
 
 def play(device, flac):
     rate = flac.samplerate
-    channels = flac.channels    
-    subtype = flac.subtype
+    channels = flac.channels
 
-    print("{} channels, {} sampling rate, {} subtype".format(
-        channels, rate, subtype
+    print("{} channels, {} sampling rate".format(
+        channels, rate
     ))
-
-    arhgt
 
     # Set attributes
     device.setchannels(channels)
     device.setrate(rate)
 
-    # 8bit is unsigned in wav files
-    if width == 1:
-        device.setformat(alsaaudio.PCM_FORMAT_U8)
-    # Otherwise we assume signed data, little endian
-    elif width == 2:
-        device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-    elif width == 3:
-        device.setformat(alsaaudio.PCM_FORMAT_S24_3LE)
-    elif width == 4:
-        device.setformat(alsaaudio.PCM_FORMAT_S32_LE)
-    else:
-        raise ValueError('Unsupported format')
-
+    # write stuff to ALSA in 1/8 second chunks
     periodsize = int(rate / 8)
-
     device.setperiodsize(periodsize)
-    
-    for frame in mp3.iter_frames():
-        device.write(frame)
+
+    # Soundfile will stuff as 32-bit with our read dtype below
+    device.setformat(alsaaudio.PCM_FORMAT_S32_LE)
+
+    for frame in flac.blocks(blocksize=periodsize, dtype="int32"):
+        device.write(frame.tobytes())
 
 
 def usage():
