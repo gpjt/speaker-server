@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 import numpy as np
 import soundfile
@@ -25,6 +26,8 @@ def generate_test_audio(samples_per_second):
 
 if __name__ == "__main__":
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-audio")
+    if not os.path.isdir(output_dir):
+        os.mkdir(output_dir)
 
     samples_per_second = 96000
     data = generate_test_audio(samples_per_second=samples_per_second)
@@ -32,3 +35,10 @@ if __name__ == "__main__":
     soundfile.write(os.path.join(output_dir, "tune-16x96000.flac"), data, samples_per_second, subtype="PCM_16")
     soundfile.write(os.path.join(output_dir, "tune-24x96000.wav"), data, samples_per_second, subtype="PCM_24")
     soundfile.write(os.path.join(output_dir, "tune-24x96000.flac"), data, samples_per_second, subtype="PCM_24")
+    subprocess.check_call(
+        "ffmpeg -i {input_file} -b:a 320k {output_file}".format(
+            input_file=os.path.join(output_dir, "tune-24x96000.wav"),
+            output_file=os.path.join(output_dir, "tune.mp3")
+        ),
+        shell=True
+    )
