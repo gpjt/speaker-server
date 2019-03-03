@@ -3,13 +3,14 @@ import logging
 import hypercorn.asyncio
 import hypercorn.config
 from quart import Quart
+from quart.json import jsonify
 
 
 app = Quart(__name__)
 
 @app.route('/')
-async def hello():
-    return 'hello'
+async def playlist():
+    return jsonify([])
 
 
 def start_webserver(loop, ip_address):

@@ -53,3 +53,5 @@ class Test_1_POST_song_data_creates_playlist_with_posted_data(unittest.TestCase)
         response = requests.get(self.service_descriptor["web_url"])
         assert response.status_code == 200
 
+        data = response.json()
+
