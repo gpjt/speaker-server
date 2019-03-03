@@ -1,6 +1,11 @@
+docopt
 ipython
+netifaces
 numpy
 pyflakes
 pysoundfile
+pytest
+quart
+requests
 https://github.com/20tab/mpg123-python/archive/master.zip
 https://github.com/larsimmisch/pyalsaaudio/archive/master.zip
