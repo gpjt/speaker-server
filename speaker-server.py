@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Starts the media server
+"""Starts the speaker server
 
 Usage:
   speaker-server.py <config_file>
@@ -11,30 +11,13 @@ import logging
 import sys
 
 from docopt import docopt
-import hypercorn.asyncio
-import hypercorn.config
 import netifaces
-from quart import Quart
 
 from service_discovery.discovery_constants import DISCOVERY_TYPES
 from service_discovery.discovery_server import start_discovery_server
 
+from web_interface import start_webserver
 
-def start_webserver(loop, ip_address):
-    app = Quart(__name__)
-
-    @app.route('/')
-    async def hello():
-        return 'hello'
-
-    bind_address = "{}:9943".format(ip_address)
-    print("Binding to {}".format(bind_address))
-    config = hypercorn.config.Config.from_mapping({
-        "bind": [bind_address]
-    })
-    loop.create_task(hypercorn.asyncio.serve(app, config))
-
-    return "http://{}".format(bind_address)
 
 
 def start_servers(loop, ip_address, discovery_network):
@@ -71,7 +54,6 @@ def get_discovery_info(configfile):
 
 
 if __name__ == "__main__":
-    print("a")
     arguments = docopt(__doc__)
     config_file = arguments["<config_file>"]
     ip_address, discovery_network = get_discovery_info(config_file)
