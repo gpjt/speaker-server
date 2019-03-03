@@ -23,7 +23,7 @@ class Test_1_POST_song_data_creates_playlist_with_posted_data(unittest.TestCase)
                 "discovery_network": discovery_network,
                 "network_interface": "lo",
             }))
-        server_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speaker-server.py")
+        server_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speaker_server.py")
         self.subprocess = subprocess.Popen(["python", server_file, self.config_filename])
 
         # The discovery network stuff uses the logging module, so we'll configure it
@@ -45,6 +45,7 @@ class Test_1_POST_song_data_creates_playlist_with_posted_data(unittest.TestCase)
 
     def tearDown(self):
         self.subprocess.kill()
+        self.subprocess.wait()
         os.remove(self.config_filename)
 
 

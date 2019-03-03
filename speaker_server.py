@@ -2,7 +2,7 @@
 """Starts the speaker server
 
 Usage:
-  speaker-server.py <config_file>
+  speaker_server.py <config_file>
 """
 
 import asyncio
