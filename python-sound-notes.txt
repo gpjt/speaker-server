@@ -362,20 +362,133 @@ for (a1, b1), (a2, b2) in zip(data, data2):
 
 
 
+-----------------------
+
+About a year later
+
+## 2019-12-29, written up 2019-12-30)
+
+Have been messing around with this again now that I have the hifi set up with the new Rega amp in the spare room.  New RPi 4, HifiBerry DigiPlus card providing S/PDIF output to a Schiit Modi 3 DAC.
+
+The Python code that I have at this point can play the following files without problems:
+
+no-commit-test-samples/day-i-die.flac:    FLAC audio bitstream data, 24 bit, stereo, 44.1 kHz, 11974620 samples
+no-commit-test-samples/day-i-die.mp3:     Audio file with ID3 version 2.4.0, contains:MPEG ADTS, layer III, v1, 192 kbps, 44.1 kHz, JntStereo
+no-commit-test-samples/day-i-die.wav:     RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, stereo 44100 Hz
+no-commit-test-samples/sea-of-love.flac:  FLAC audio bitstream data, 24 bit, stereo, 96 kHz, 21258240 samples
+no-commit-test-samples/sea-of-love.wav:   RIFF (little-endian) data, WAVE audio, Microsoft PCM, 24 bit, stereo 96000 Hz
+
+However, this higher-res one has a loud high-pitched hiss when played:
+
+no-commit-test-samples/stabat-mater.flac: FLAC audio bitstream data, 24 bit, stereo, 192 kHz, 45641339 samples
+
+I don't know why this is, but it only happens with my Python code -- with SoX's `play` command it sounds fine.
+
+While investigating this, I found out how to show the actual sample rate being used by the card during playback, and found that it was maxing out at 48khz -- whichever way I played the music:
+
+giles@pandora:~/speaker-server $ cat /proc/asound/sndrpihifiberry/pcm0p/sub0/hw_params
+access: MMAP_INTERLEAVED
+format: S16_LE
+subformat: STD
+channels: 2
+rate: 48000 (48000/1)
+period_size: 6000
+buffer_size: 18000
+
+
+note also 16-bit.
+
+Investigation suggests that this might be an ALSA limitation on the Pi:
+
+"Alsa driver limited to 16-bit / 48kHz audio files": open issue against raspberrypi/linux on GitHub: https://github.com/raspberrypi/linux/issues/494
+Reference to using OpenMax instead of ALSA to work around this: https://www.raspberrypi.org/forums/viewtopic.php?t=65661
+SO: "Not a single recent Ubuntu release allows you to change ALSA settings via configuration files. Apparently, ALSA will always resample everything to 48KHz/16bit and you're stuck to it. I must remind you that ALSA mixing and resampling algorithms are of very, very, low quality, similar to XP's KMixer.": https://askubuntu.com/a/245240 -- but also see comment "This is wrong nowadays. ALSA uses whatever sample format and rate the source is configured to. See [here](https://unix.stackexchange.com/questions/74558/change-sampling-rate-in-alsa/74569#74569)"
+More Digi+ 192khz woes: https://support.hifiberry.com/hc/en-us/community/posts/205902015-192-kHz-24-bit-problem-with-Hifiberry-Digi-
+The github issue suggests a kernel patch, and this support forum thread for a media player app suggests that they patch the kernel in some way for hi-res audio: https://www.max2play.com/en/forums/topic/hd-audio-192khz24-not-working-on-hifiberry-digi-pro/
+
+Lots of people seem to be using Volumio for hi-res, and the technical overview for it at https://volumio.org/technical-overview/ suggests that it uses ALSA, so presumably they're patching it.
 
 
 
+## 2019-12-30
+
+But now it gets weirder.  While typing up the above, I re-ran some commands and played the problematic file again.  There was no hiss at all, and checking the output rate showed it was working fine!  When driving the Modi directly over USB:
+
+giles@pandora:~ $ cat /proc/asound/card1/pcm0p/sub0/hw_params
+access: RW_INTERLEAVED
+format: S32_LE
+subformat: STD
+channels: 2
+rate: 192000 (192000/1)
+period_size: 24000
+buffer_size: 96000
+
+...and when going via the Digi+ S/PDIF:
+
+giles@pandora:~ $ cat /proc/asound/card0/pcm0p/sub0/hw_params
+access: MMAP_INTERLEAVED
+format: S24_LE
+subformat: STD
+channels: 2
+rate: 192000 (192000/1)
+period_size: 24000
+buffer_size: 48000
 
 
+What happened overnight?  journalctl time
 
+Looks like it rebooted at 2am, but that was (I think) my attempt to get things working with USB instead of S/PDIF, and I don't think it worked.  In fact, it must have been before I finished because my ssh sessions were still active, and one of them was showing a hw_params with 48khz from a test I ran then.
 
+Overnight there's a lot of chatter about the random number generator building up its entropy, and this:
 
+Dec 30 06:04:30 pandora systemd[1]: Starting Daily apt upgrade and clean activities...
+Dec 30 06:04:32 pandora systemd[1]: apt-daily-upgrade.service: Succeeded.
+Dec 30 06:04:32 pandora systemd[1]: Started Daily apt upgrade and clean activities.
 
+I wonder if you need to do an apt-get upgrade after configuring the Digi+ in order to get the hi-res stuff working?  The upgrade I run as part of the system setup is during the initial setup, before the HiFiBerry stuff.  Also, the machine was set up on Dec 28 17:49.  Plenty of time for an upgrade.
 
+Weird, though, as you would have thought that if it requires a kernel patch to get ALSA working, it would also require a reboot?
 
+Well, although I'm loath to break a working system, we need to get to the bottom of this.  Let's try a repave and if it sounds staticy, see if an upgrade helps.
 
+During rebuild: it reboots after installing the HifiBerry stuff, but I didn't see it do any upgrades.
 
+Post rebuild:
 
+Hiss on first play, and:
+
+giles@pandora:~ $ cat /proc/asound/card0/pcm0p/sub0/hw_params
+access: MMAP_INTERLEAVED
+format: S16_LE
+subformat: STD
+channels: 2
+rate: 48000 (48000/1)
+period_size: 6000
+buffer_size: 18000
+giles@pandora:~ $
+
+(speaker-server) giles@pandora:~/speaker-server $ sudo apt-get update
+[sudo] password for giles:
+Hit:1 http://archive.raspberrypi.org/debian buster InRelease
+Get:2 http://raspbian.raspberrypi.org/raspbian buster InRelease [15.0 kB]
+Fetched 15.0 kB in 1s (15.9 kB/s)
+Reading package lists... Done
+(speaker-server) giles@pandora:~/speaker-server $ sudo apt-get upgrade
+Reading package lists... Done
+Building dependency tree
+Reading state information... Done
+Calculating upgrade... Done
+The following packages have been kept back:
+  raspi-config
+0 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.
+
+Hmmm.  No-op.
+
+Another reboot?
+
+No difference.
+
+That's really weird!
 
 
 
