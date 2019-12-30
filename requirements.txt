@@ -3,7 +3,7 @@ ipython
 netifaces
 numpy
 pyflakes
-pysoundfile
+soundfile
 pytest
 quart
 requests
