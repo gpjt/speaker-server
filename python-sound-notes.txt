@@ -490,10 +490,343 @@ No difference.
 
 That's really weird!
 
+What else did I do?  I tried running stuff through the USB... and in order to do that I changed the /etc/asound.conf and changed it to this:
+
+pcm.!default {
+    type hw
+    card 1
+}
+
+ctl.!default {
+    type hw
+    card 1
+}
+
+...then changed it back.  But perhaps that did something?  I wish I'd made a record of its contents when the audio was working!
+
+My current asound.conf is this:
+
+pcm.hifiberry {
+ type hw card 0
+}
+
+pcm.!default {
+ type plug
+ slave.pcm "dmixer"
+}
+
+pcm.dmixer {
+ type dmix
+ ipc_key 1024
+ slave {
+  pcm "hifiberry"
+  channels 2
+ }
+}
+
+ctl.dmixer {
+ type hw
+ card 0
+}
+
+...that mixer looks suspicious, perhaps it limits sample rate and bits per sample?
+
+Let's see what happens if we switch to the other settings... change, reboot
+
+(speaker-server) giles@pandora:~/speaker-server $ ./playflac.py no-commit-test-samples/stabat-mater.flac
+Traceback (most recent call last):
+  File "./playflac.py", line 52, in <module>
+    device = alsaaudio.PCM(device=device)
+alsaaudio.ALSAAudioError: No such file or directory [default]
 
 
+(speaker-server) giles@pandora:~/speaker-server $ aplay -L
+null
+    Discard all samples (playback) or generate zero samples (capture)
+default
+sysdefault:CARD=sndrpihifiberry
+    snd_rpi_hifiberry_digi,
+    Default Audio Device
+iec958:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    IEC958 (S/PDIF) Digital Audio Output
+dmix:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct sample mixing device
+dsnoop:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct sample snooping device
+hw:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct hardware device without any conversions
+plughw:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Hardware device with all software conversions
+(speaker-server) giles@pandora:~/speaker-server $ ./playflac.py -d 'sysdefault:CARD=sndrpihifiberry' no-commit-test-samples/stabat-mater.flac
+2 channels, 192000 sampling rate
+^CTraceback (most recent call last):
+  File "./playflac.py", line 54, in <module>
+    play(device, flac)
+  File "./playflac.py", line 32, in play
+    device.write(frame.tobytes())
+KeyboardInterrupt
+
+No hiss!  And checking the /proc thing gets
+
+giles@pandora:~ $ cat /proc/asound/card0/pcm0p/sub0/hw_params
+access: MMAP_INTERLEAVED
+format: S24_LE
+subformat: STD
+channels: 2
+rate: 192000 (192000/1)
+period_size: 24000
+buffer_size: 48000
 
 
+So we have our culprit.
+
+So what was I trying to do with the old conf?  I think it's because the HifiBerry is/was something that gets owned by a program and I need to have multiple programs writing to it -- my speaker and perhaps the airplay thing and the barker and spotifyd, and some of these might not relinquish ownership when they're not using it.
+
+Relevantly, from https://www.alsa-project.org/wiki/Asoundrc
+
+"The dmix PCM name is already defined in the global configuration file /usr/share/alsa/alsa.conf.
+
+- The default sample rate for this device is 48000Hz."
+
+Looks like the config is copypasta from https://support.hifiberry.com/hc/en-us/articles/207397665-Mixing-different-audio-sources
+
+Let's try to understand the file line by line
+
+pcm.hifiberry {
+ type hw card 0
+}
+
+from the docs, it looks like this is ill-formatted.  It should be
+
+pcm.hifiberry {
+ type hw
+ card 0
+}
+
+...meaning that "hifiberry" is an alias for the hardware card zero.
+
+This one is less clear from the docs:
+
+pcm.!default {
+ type plug
+ slave.pcm "dmixer"
+}
+
+...but
+
+pcm.!default {
+ type plug
+
+follows the same pattern as the earlier alias, and uses the magic `!default` alias name -- it means that we're defining an alias for !default pointing to a plugin.  It then makes sense that the next bit means "the one called dmixer"
+
+The "dmix" example on https://www.alsa-project.org/wiki/Asoundrc has a similar stanza.
+
+Now we have
+
+pcm.dmixer {
+ type dmix
+ ipc_key 1024
+ slave {
+  pcm "hifiberry"
+  channels 2
+ }
+}
+
+This actually looks like a cut-down version of the dmix example on https://www.alsa-project.org/wiki/Asoundrc.  We have a pcm sink named dmixer (referenced in the default alias above) which is a dmix object.  As per https://unix.stackexchange.com/a/353267/144948
+
+    ipc_key: dmix, dshare and dsnoop plugins allow multiple clients to communicate with a single source/sink. This communication is done via this key (IPC = Inter-Process Communication). So the key needs to be different for every plugin, no matter if you have several plugins for one soundcard or one plugin each for several soundcard, or you'll run into trouble.
+
+...then we just say that its output is the "hifiberry" pcm device.
+
+Finally we have this:
+
+ctl.dmixer {
+ type hw
+ card 0
+}
+
+It looks like it's saying that the control device for the dmixer is the same as the one for card zero.  Not sure why we don't need a block like this:
+
+pcm.!default {
+ type plug
+ slave.pcm "dmixer"
+}
+
+...for example
+
+ctl.!default {
+ type plug
+ slave.ctl "dmixer"
+}
+
+...in order to wire it up as the default control device, though.
+
+Anyway, in the light of the above, the example dmix config on https://www.alsa-project.org/wiki/Asoundrc makes sense:
+
+pcm.!default {
+        type plug
+        slave.pcm "dmixer"
+}
+
+pcm.dmixer  {
+        type dmix
+        ipc_key 1024
+        slave {
+                pcm "hw:1,0"
+                period_time 0
+                period_size 1024
+                buffer_size 4096
+                rate 44100
+        }
+        bindings {
+                0 0
+                1 1
+        }
+}
+
+ctl.dmixer {
+        type hw
+        card 0
+}
+
+They're skipping the initial alias, and have some more stuff in the dmixer block, but it's basically the same.
+
+So let's try merging the two and bumping up the same rate.  According to https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html, "The resolution for 32-bit mixing is only 24-bit. The low significant byte is filled with zeros. The extra 8 bits are used for the saturation." -- so we should be OK for amplitude resolution.
+
+So let's try this:
+
+pcm.hifiberry {
+    type hw
+    card 0
+}
+
+pcm.!default {
+    type plug
+    slave.pcm "dmixer"
+}
+
+pcm.dmixer {
+    type dmix
+    ipc_key 1024
+    slave {
+        pcm "hifiberry"
+        format S24_LE
+        channels 2
+        format S32_LE
+        period_size 24000
+        buffer_size 48000
+        rate 192000
+    }
+    bindings {
+        0 0
+        1 1
+    }
+}
+
+ctl.dmixer {
+    type hw
+    card 0
+}
+
+...where the rate is obvious, and the format and the period and buffer sizes come from that /proc output when I was playing stuff earlier.  buffer_time is removed because you're meant to specify either that or buffer_size
+
+Let's give that a go.
+
+After applying the config and rebooting:
+
+(speaker-server) giles@pandora:~/speaker-server $ aplay -L
+null
+    Discard all samples (playback) or generate zero samples (capture)
+hifiberry
+default
+dmixer
+sysdefault:CARD=sndrpihifiberry
+    snd_rpi_hifiberry_digi,
+    Default Audio Device
+iec958:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    IEC958 (S/PDIF) Digital Audio Output
+dmix:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct sample mixing device
+dsnoop:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct sample snooping device
+hw:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Direct hardware device without any conversions
+plughw:CARD=sndrpihifiberry,DEV=0
+    snd_rpi_hifiberry_digi,
+    Hardware device with all software conversions
 
 
+No static when playing
+
+giles@pandora:~ $ cat /proc/asound/card0/pcm0p/sub0/hw_params
+access: MMAP_INTERLEAVED
+format: S16_LE
+subformat: STD
+channels: 2
+rate: 192000 (192000/1)
+period_size: 24000
+buffer_size: 48000
+
+Can play from bot at the same time as playback!
+
+So the only issue is that format, which is 16-bit.
+
+Almost there...?
+
+Ah, hang on -- there were two format strings in there, perhaps it treated that as an error and ignored both.  Let's drop the 32-bit one:
+
+pcm.hifiberry {
+    type hw
+    card 0
+}
+
+pcm.!default {
+    type plug
+    slave.pcm "dmixer"
+}
+
+pcm.dmixer {
+    type dmix
+    ipc_key 1024
+    slave {
+        pcm "hifiberry"
+        format S24_LE
+        channels 2
+        period_size 24000
+        buffer_size 48000
+        rate 192000
+    }
+    bindings {
+        0 0
+        1 1
+    }
+}
+
+ctl.dmixer {
+    type hw
+    card 0
+}
+
+...reboot, and:
+
+access: MMAP_INTERLEAVED
+format: S24_LE
+subformat: STD
+channels: 2
+rate: 192000 (192000/1)
+period_size: 24000
+buffer_size: 48000
+
+w00t!
+
+I think we may be all set.
 
